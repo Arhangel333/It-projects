@@ -1,2 +1,11 @@
-numpy>=1.23.0
-taichi>=1.6.0
+
+(blender_project) C:\Users\azhim\Desktop\proj>"C:\Program Files\Blender Foundation\Blender 3.4\blender" --python test.py
+Read prefs: C:\Users\azhim\AppData\Roaming\Blender Foundation\Blender\3.4\config\userpref.blend
+╨Ю╤И╨╕╨▒╨║╨░: Python: Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\azhim\Desktop\proj\test.py", line 1, in <module>
+    import taichi as ti
+ModuleNotFoundError: No module named 'taichi'
+
+
+
