@@ -10,6 +10,7 @@ curl -o Miniconda3-installer.exe https://repo.anaconda.com/miniconda/Miniconda3-
 **2** В cmd перейдите в директорию где находится наш проект и файл окружения environment.yml   
 
 **3** Выполните команду для активации окружения из environment.yml в cmd при помощи conda(Miniconda)  
+C:\Users\azhim\miniconda3\scripts\activate blender_project  
 "путь к исполняемому файлу блендера" проект.blend --python scripts\script.py  
 где  
     проект.blend - проект блендера который мы хотим запустить  
