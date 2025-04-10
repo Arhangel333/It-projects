@@ -12,6 +12,7 @@ PARTICLE_COUNT = 1000
 CYLINDER_RADIUS = 3.0
 CYLINDER_HEIGHT = 15.0
 
+
 # Taichi поля
 particles_pos = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_COUNT)
 density_field = ti.field(dtype=ti.f32)
@@ -67,10 +68,13 @@ def create_hollow_cylinder(radius=3.0, height=5.0, thickness=0.5):
     return outer
 
 @ti.kernel
-def update_particles(particles: ti.types.ndarray(dtype=ti.math.vec3), wind: ti.math.vec3):
+def update_particles(particles: ti.types.ndarray(dtype=ti.math.vec3), 
+                   wind: ti.math.vec3,
+                   speed: ti.f32):  # Добавляем параметр скорости
     for i in range(particles.shape[0]):
         pos = particles[i]
-        pos += wind + ti.Vector([ti.random()*0.1-0.05 for _ in range(3)])
+        velocity = wind * speed + ti.Vector([ti.random()*0.1-0.05 for _ in range(3)])
+        pos += velocity * 0.1  # Уменьшаем шаг для стабильности
         
         # Ограничение движения внутри цилиндра
         if pos.z > CYLINDER_HEIGHT/2:
@@ -132,7 +136,7 @@ def setup_density_visualization(cylinder):
         cylinder.data.vertices.foreach_get("co", verts.ravel())
         density = np.empty(len(cylinder.data.vertices), dtype=np.float32)
         
-        update_particles(part_data, ti.math.vec3(0,0,0.5))
+        update_particles(part_data, ti.math.vec3(0,0,0.5), 500.0)
         calculate_density(verts, density)
         
         # Обновляем атрибут
@@ -163,6 +167,10 @@ def main():
     settings.lifetime = 100
     settings.emit_from = 'FACE'
     settings.physics_type = 'NEWTON'
+    settings.normal_factor = 10
+
+
+
     
     setup_density_visualization(cylinder)
    
