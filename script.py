@@ -2,14 +2,15 @@ import bpy
 import math
 import numpy as np
 import taichi as ti
+import bmesh
 
 # Инициализация Taichi с поддержкой Vulkan
 ti.init(arch=ti.vulkan)
 
 # Константы
-PARTICLE_COUNT = 2000
+PARTICLE_COUNT = 1000
 CYLINDER_RADIUS = 3.0
-CYLINDER_HEIGHT = 5.0
+CYLINDER_HEIGHT = 15.0
 
 # Taichi поля
 particles_pos = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_COUNT)
@@ -24,14 +25,40 @@ def create_hollow_cylinder(radius=3.0, height=5.0, thickness=0.5):
     outer = bpy.context.object
     outer.name = "Outer_Cylinder"
     
-    bpy.ops.mesh.primitive_cylinder_add(radius=radius-thickness, depth=height+0.2)
-    inner = bpy.context.object
+    if outer and outer.type == 'MESH':
+    # Переходим в режим редактирования
+        bpy.ops.object.mode_set(mode='EDIT')
+        mesh = bmesh.from_edit_mesh(outer.data)
+         # Выбираем все полигоны
+        bpy.ops.mesh.select_all(action='SELECT')
+        
+        # Переключаемся в режим вершин (чтобы корректно выделить грани)
+        bpy.ops.mesh.select_mode(type='FACE')
+        
+        # Выделяем только полигоны, перпендикулярные оси Z (верх/низ)
+        for face in mesh.faces:
+            normal = face.normal
+            if abs(normal.z) > 0.99:  # Если нормаль почти по Z (верх/низ)
+                face.select = True
+            else:
+                face.select = False
+        
+        # Удаляем выделенные полигоны (верх и низ)
+        bpy.ops.mesh.delete(type='FACE')
+        
+        # Обновляем сетку
+        bmesh.update_edit_mesh(outer.data)
+        
+        # Возвращаемся в объектный режим
+        bpy.ops.object.mode_set(mode='OBJECT')
+        
+        print("Круглые полигоны удалены, осталась только боковая поверхность!")
+    else:
+        print("Активный объект не является мешем или не выбран!")
     
-    bool_mod = outer.modifiers.new(name="Bool", type='BOOLEAN')
-    bool_mod.operation = 'DIFFERENCE'
-    bool_mod.object = inner
-    bpy.ops.object.modifier_apply(modifier="Bool")
-    bpy.data.objects.remove(inner)
+    outer.modifiers.new(name="Collision", type='COLLISION')
+
+    #bpy.data.objects.remove(inner)
     
     outer.name = "Hollow_Cylinder"
     
@@ -120,13 +147,16 @@ def main():
     
     # Создаем объекты
     cylinder = create_hollow_cylinder(CYLINDER_RADIUS, CYLINDER_HEIGHT)
-    bpy.ops.mesh.primitive_plane_add(size=CYLINDER_RADIUS*2)
+    bpy.ops.transform.rotate(value=math.pi/2.0, orient_axis='Y', orient_type='GLOBAL', orient_matrix=((1, 0, 0), (0, 1, 0), (0, 0, 1)), orient_matrix_type='GLOBAL', constraint_axis=(False, True, False), mirror=False, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=1, use_proportional_connected=False, use_proportional_projected=False, snap=False, snap_elements={'INCREMENT'}, use_snap_project=False, snap_target='CLOSEST', use_snap_self=True, use_snap_edit=True, use_snap_nonedit=True, use_snap_selectable=False)
+    bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, -1.5), scale=(1, 5, 1.5))
+    cube = bpy.context.object
+    cube.modifiers.new(name="Collision", type='COLLISION')
+
+    bpy.ops.mesh.primitive_plane_add(size=CYLINDER_RADIUS*2, rotation=(math.pi/2.0, 0, math.pi/2.0), location=(-CYLINDER_HEIGHT/2 - 0.5, 0, 0))
     emitter = bpy.context.object
     emitter.name = "Particle_Emitter"
-    emitter.location.z = -CYLINDER_HEIGHT/2 - 0.5
-    emitter.rotation_euler.x = math.pi/2
     
-    # Настраиваем частицы
+    
     psys = emitter.modifiers.new(name="Particles", type='PARTICLE_SYSTEM').particle_system
     settings = psys.settings
     settings.count = PARTICLE_COUNT
@@ -134,14 +164,14 @@ def main():
     settings.emit_from = 'FACE'
     settings.physics_type = 'NEWTON'
     
-    # Настраиваем визуализацию плотности
     setup_density_visualization(cylinder)
-    
+   
     # Камера и свет
-    bpy.ops.object.camera_add(location=(10, -10, 5))
+    bpy.ops.object.camera_add(location=(-2.97332, -33.2669, 3.56712), rotation=(math.radians(82.8666), math.radians(-0.000004), math.radians(-3.26668)))
     bpy.context.scene.camera = bpy.context.object
     
     bpy.ops.object.light_add(type='SUN', location=(15, -15, 20))
+   
     
     print("Сцена готова! Нажмите пробел для запуска анимации")
 
