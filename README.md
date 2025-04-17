@@ -1,3 +1,6 @@
+Последняя версия кода в actualcode.py  
+  
+
 PYTHON INTERACTIVE CONSOLE 3.11.11  
 Чтобы запустить проект:  
 
