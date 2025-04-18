@@ -8,18 +8,26 @@ import bmesh
 ti.init(arch=ti.vulkan)
 
 # Константы
-PARTICLE_COUNT = 1000
+PARTICLE_COUNT = 2000
 CYLINDER_RADIUS = 3.0
 CYLINDER_HEIGHT = 15.0
+
+cylinder_obj = None
 
 
 # Taichi поля
 particles_pos = ti.Vector.field(3, dtype=ti.f32, shape=PARTICLE_COUNT)
-density_field = ti.field(dtype=ti.f32)
+density_field = ti.field(dtype=ti.f32, shape=PARTICLE_COUNT)  # Явно указана форма
 
 def clear_scene():
+    # Удаляем все обработчики перед очисткой сцены
+    for handler in bpy.app.handlers.frame_change_pre[:]:
+        if "update_density" in handler.__name__:
+            bpy.app.handlers.frame_change_pre.remove(handler)
+    
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete()
+
 
 def create_hollow_cylinder(radius=3.0, height=5.0, thickness=0.5):
     bpy.ops.mesh.primitive_cylinder_add(radius=radius, depth=height)
@@ -79,6 +87,8 @@ def update_particles(particles: ti.types.ndarray(dtype=ti.math.vec3),
         # Ограничение движения внутри цилиндра
         if pos.z > CYLINDER_HEIGHT/2:
             pos.z = -CYLINDER_HEIGHT/2
+        if pos.y > CYLINDER_HEIGHT/2:
+            pos.y = -CYLINDER_HEIGHT/2
         
         particles_pos[i] = pos
         particles[i] = pos
@@ -92,69 +102,148 @@ def calculate_density(vertices: ti.types.ndarray(dtype=ti.math.vec3),
         
         for j in range(PARTICLE_COUNT):
             dist = (vert_pos - particles_pos[j]).norm()
-            density += ti.exp(-dist * 2.0)
+            density += ti.exp(-dist * 0.5)
             
         density_out[i] = density
 
 def setup_density_visualization(cylinder):
-    # Создаем атрибут плотности
-    cylinder.data.attributes.new(name="density", type='FLOAT', domain='POINT')
+    global cylinder_obj
+    cylinder_obj = cylinder  # Сохраняем ссылку
+    print(f"check\n")
+    # Удаляем старый атрибут если существует
+    if "density" in cylinder.data.attributes:
+        cylinder.data.attributes.remove(cylinder.data.attributes["density"])
+    
+    # Создаем новый атрибут
+    density_attr = cylinder.data.attributes.new(name="density", type='FLOAT', domain='POINT')
     
     # Создаем материал
-    mat = bpy.data.materials.new(name="DensityMaterial")
-    mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    nodes.clear()
-    
-    # Настраиваем ноды материала
-    attr = nodes.new('ShaderNodeAttribute')
-    attr.attribute_name = "density"
-    ramp = nodes.new('ShaderNodeValToRGB')
-    ramp.color_ramp.elements[0].color = (0,0,1,1)
-    ramp.color_ramp.elements[1].color = (1,0,0,1)
-    
-    output = nodes.new('ShaderNodeOutputMaterial')
-    principled = nodes.new('ShaderNodeBsdfPrincipled')
-    
-    # Соединяем ноды
-    links = mat.node_tree.links
-    links.new(attr.outputs['Fac'], ramp.inputs['Fac'])
-    links.new(ramp.outputs['Color'], principled.inputs['Base Color'])
-    links.new(principled.outputs['BSDF'], output.inputs['Surface'])
-    
-    cylinder.data.materials.append(mat)
-    
-    # Обработчик кадров
-    def update_density(scene):
-        particles = bpy.data.objects["Particle_Emitter"].particle_systems[0].particles
-        part_data = np.empty((PARTICLE_COUNT, 3), dtype=np.float32)
+    if "DensityMaterial" not in bpy.data.materials:
+        mat = bpy.data.materials.new(name="DensityMaterial")
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes.clear()
         
-        for i, p in enumerate(particles):
-            part_data[i] = p.location
+        # Настройка нод материала
+        attr = nodes.new('ShaderNodeAttribute')
+        attr.attribute_name = "density"
         
-        verts = np.empty((len(cylinder.data.vertices), 3), dtype=np.float32)
-        cylinder.data.vertices.foreach_get("co", verts.ravel())
-        density = np.empty(len(cylinder.data.vertices), dtype=np.float32)
+        ramp = nodes.new('ShaderNodeValToRGB')
+        # Устанавливаем цвета:
         
-        update_particles(part_data, ti.math.vec3(0,0,0.5), 500.0)
-        calculate_density(verts, density)
         
-        # Обновляем атрибут
-        density_attr = cylinder.data.attributes["density"]
-        for i, val in enumerate(density):
-            density_attr.data[i].value = val
+        ramp.color_ramp.elements.new(0.25)  # Позиция 0.25 (не середина)
+        ramp.color_ramp.elements.new(0.5)  # Позиция 0.5 (середина)
+        ramp.color_ramp.elements.new(0.75)  # Позиция 0.75 (не середина)
+
+        # - Зелёный (низкая плотность)
+        ramp.color_ramp.elements[1].color = (0, 1, 0, 1)
+        # - Синий (средняя плотность)
+        ramp.color_ramp.elements[0].color = (0, 0, 1, 1)  # R, G, B, A
+        # - Жёлтый (средняя плотность)
+        ramp.color_ramp.elements[2].color = (1, 1, 0, 1)
+        # - Красный (высокая плотность)
+        ramp.color_ramp.elements[3].color = (1, 0, 0, 1)
+
+        map_range = nodes.new('ShaderNodeMapRange')
+        map_range.inputs['From Min'].default_value = 0.0
+        map_range.inputs['From Max'].default_value = 1.0
+        
+        """ ramp = nodes.new('ShaderNodeValToRGB')
+        ramp.color_ramp.elements[0].color = (0, 0, 1, 1)
+        ramp.color_ramp.elements[1].color = (1, 0, 0, 1) """
+        
+        output = nodes.new('ShaderNodeOutputMaterial')
+        principled = nodes.new('ShaderNodeBsdfPrincipled')
+        
+        # Соединяем ноды
+        links = mat.node_tree.links
+        links.new(attr.outputs['Fac'], map_range.inputs['Value'])
+        links.new(map_range.outputs['Result'], ramp.inputs['Fac'])
+        links.new(ramp.outputs['Color'], principled.inputs['Base Color'])
+        links.new(principled.outputs['BSDF'], output.inputs['Surface'])
+    else:
+        mat = bpy.data.materials["DensityMaterial"]
     
-    bpy.app.handlers.frame_change_pre.append(update_density)
+    # Назначаем материал
+    if cylinder.data.materials:
+        cylinder.data.materials[0] = mat
+    else:
+        cylinder.data.materials.append(mat)
+
+def update_density(scene):
+    global cylinder_obj
+    
+    # Проверяем, что объекты существуют
+    if not cylinder_obj or not cylinder_obj.name in bpy.data.objects:
+        return
+    
+    emitter = bpy.data.objects.get("Particle_Emitter")
+    if not emitter or not emitter.particle_systems:
+        return
+        
+    dg = bpy.context.evaluated_depsgraph_get()
+    ob = bpy.data.objects["Particle_Emitter"].evaluated_get(dg)
+    ps = ob.particle_systems.active
+
+   
+    particles = ps.particles
+    part_data = np.empty((PARTICLE_COUNT, 3), dtype=np.float32)
+    for i in range(PARTICLE_COUNT):
+        p = particles[i]
+        """ print(f"Частица: location={p.location}")  # Вывод вектора целиком
+        print(f"Координаты: X={p.location.x}, Y={p.location.y}, Z={p.location.z}") """
+    
+    
+    
+    for i, p in enumerate(particles):
+        part_data[i] = p.location
+    
+    print(f" Cilinder verts = {len(cylinder_obj.data.vertices)}\n")
+    verts = np.empty((len(cylinder_obj.data.vertices), 3), dtype=np.float32)
+    cylinder_obj.data.vertices.foreach_get("co", verts.ravel())
+    density = np.empty(len(cylinder_obj.data.vertices), dtype=np.float32)
+    
+    update_particles(part_data, ti.math.vec3(0, 0, 0.5), 500.0)
+    calculate_density(verts, density)
+    print(f" Verts = {verts}\n")
+    
+    # Обновляем атрибут
+    density_attr = cylinder_obj.data.attributes["density"]
+    for i, val in enumerate(density):
+        density_attr.data[i].value = val
+    
+    cylinder_obj.data.update()
+
+
+    
+
 
 def main():
     clear_scene()
-    
+
+
+    # Удаляем старые обработчики перед запуском
+    for handler in bpy.app.handlers.frame_change_pre[:]:
+        if "update_density" in handler.__name__:
+            bpy.app.handlers.frame_change_pre.remove(handler)
+
+
+
+    #bpy.context.window.workspace = bpy.data.workspaces["Скриптинг"]
     # Создаем объекты
     cylinder = create_hollow_cylinder(CYLINDER_RADIUS, CYLINDER_HEIGHT)
     bpy.ops.transform.rotate(value=math.pi/2.0, orient_axis='Y', orient_type='GLOBAL', orient_matrix=((1, 0, 0), (0, 1, 0), (0, 0, 1)), orient_matrix_type='GLOBAL', constraint_axis=(False, True, False), mirror=False, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=1, use_proportional_connected=False, use_proportional_projected=False, snap=False, snap_elements={'INCREMENT'}, use_snap_project=False, snap_target='CLOSEST', use_snap_self=True, use_snap_edit=True, use_snap_nonedit=True, use_snap_selectable=False)
-    bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, -1.5), scale=(1, 5, 1.5))
+    mod = cylinder.modifiers.new(name="Subdivision", type='SUBSURF')
+    mod.levels = 2  # Количество уровней подразделения (в режиме просмотра)
+    mod.render_levels = 2  # Количество уровней при рендере
+
+    # Применяем модификатор (если нужно сразу получить результат)
+    bpy.ops.object.modifier_apply(modifier="Subdivision")
+
+    """ bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, -1.5), scale=(1, 5, 1.5))
     cube = bpy.context.object
-    cube.modifiers.new(name="Collision", type='COLLISION')
+    cube.modifiers.new(name="Collision", type='COLLISION') """
 
     bpy.ops.mesh.primitive_plane_add(size=CYLINDER_RADIUS*2, rotation=(math.pi/2.0, 0, math.pi/2.0), location=(-CYLINDER_HEIGHT/2 - 0.5, 0, 0))
     emitter = bpy.context.object
@@ -168,10 +257,12 @@ def main():
     settings.emit_from = 'FACE'
     settings.physics_type = 'NEWTON'
     settings.normal_factor = 10
+    settings.frame_start = 1
 
+    bpy.ops.ptcache.bake_all(bake=True)
+    #bpy.context.scene.frame_set(int(settings.frame_start))
 
-
-    
+    print(len(psys.particles), "COUNT TOO\n")
     setup_density_visualization(cylinder)
    
     # Камера и свет
@@ -179,7 +270,20 @@ def main():
     bpy.context.scene.camera = bpy.context.object
     
     bpy.ops.object.light_add(type='SUN', location=(15, -15, 20))
-   
+    print(settings.count, "COUNT\n")
+
+    # Добавляем новый обработчик
+    bpy.app.handlers.frame_change_pre.append(update_density)
+
+    # Переключиться на первое окно с 3D View
+    for window in bpy.context.window_manager.windows:
+        screen = window.screen
+        for area in screen.areas:
+            if area.type == 'VIEW_3D':
+                # Временное переключение контекста
+                with bpy.context.temp_override(window=window, area=area):
+                    bpy.context.space_data.shading.type = 'RENDERED'
+                break
     
     print("Сцена готова! Нажмите пробел для запуска анимации")
 
