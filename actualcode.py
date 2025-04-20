@@ -9,7 +9,7 @@ ti.init(arch=ti.vulkan)
 ti.init(debug=True)
 
 # Константы
-PARTICLE_COUNT = 10
+PARTICLE_COUNT = 1000
 CYLINDER_RADIUS = 3.0
 CYLINDER_HEIGHT = 15.0
 
@@ -79,33 +79,36 @@ def create_hollow_cylinder(radius=3.0, height=5.0, thickness=0.5):
 @ti.kernel
 def update_particles(particles: ti.types.ndarray(dtype=ti.math.vec3)):  # Добавляем параметр скорости
     for i in range(particles.shape[0]):
-        pos = particles[i]        
-        particles_pos[i] = pos
+        particles_pos[i] = particles[i]
         print(f"Particle {i}: pos=({particles_pos[i][0]},{particles_pos[i][1]}, {particles_pos[i][2]})\n")
-        particles[i] = pos
 
 @ti.kernel
 def calculate_density(vertices: ti.types.ndarray(dtype=ti.math.vec3), 
                      density_out: ti.types.ndarray(dtype=ti.f32)):
-    print(f"vert_pos i------------------------------------\n")
-    print(f"Vertex {0}: pos=({vertices[0][0]},{vertices[0][1]}, {vertices[0][2]})\n")
-    print(f"Vertex {PARTICLE_COUNT-1}: pos=({vertices[PARTICLE_COUNT-1][0]},{vertices[PARTICLE_COUNT-1][1]}, {vertices[PARTICLE_COUNT-1][2]})\n")
+    maxdist = 0.0
     for i in range(vertices.shape[0]):
         vert_pos = vertices[i]
-        print(f"Vertex {i}: pos=({vert_pos[0]},{vert_pos[1]}, {vert_pos[2]})\n")
+        #print(f"Vertex {i}: pos=({vert_pos[0]},{vert_pos[1]}, {vert_pos[2]})\n")
         density = 0.0
+        
         h = CYLINDER_RADIUS/2
         
+        
+        
         for j in range(PARTICLE_COUNT):
-            dist = (vert_pos - particles_pos[j]).norm()
+            dist = (vert_pos - particles_pos[j]).norm()  #dist = (vert_pos - particles_pos[j]).norm()
+            #print(f"Vertex {i} pos {vert_pos} : dist {j} pos {particles_pos[j]} = {dist}\n")
             influence = ti.exp(-(dist * dist) / (2.0 * h * h))
             density += influence
-            #print(f"Dist={dist} | influence={influence} = Density {density}\n")
             
+        if maxdist < density: maxdist = density   
 
             
-        density_out[i] = density / PARTICLE_COUNT  # Явная нормировка
-        print(f"Vertex {i} - Final density: {density_out[i]}\n")
+        density_out[i] = density #/ maxdist  # Явная нормировка
+
+    for i1 in range(vertices.shape[0]):
+        density_out[i1] = density_out[i1] / maxdist
+        print(f"Vertex {i1} - Final density: {density_out[i1]}, maxdist {maxdist} \n")
 
 """ @ti.kernel
 def calculate_density(vertices: ti.types.ndarray(dtype=ti.math.vec3), 
@@ -151,7 +154,7 @@ def setup_density_visualization(cylinder):
         
         
         ramp.color_ramp.elements.new(0.25)  # Позиция 0.25 (не середина)
-        ramp.color_ramp.elements.new(0.99)  # Позиция 0.5 (середина)
+        ramp.color_ramp.elements.new(0.8)  # Позиция 0.5 (середина)
 
         # - Зелёный (низкая плотность)
         ramp.color_ramp.elements[1].color = (0, 1, 0, 1)
@@ -217,11 +220,33 @@ def update_density(scene):
     verts = np.empty((len(cylinder_obj.data.vertices), 3), dtype=np.float32)
     cylinder_obj.data.vertices.foreach_get("co", verts.ravel())
     density = np.empty(len(cylinder_obj.data.vertices), dtype=np.float32)
+
+    """ frame = int(bpy.context.scene.frame_current)
+    j = frame % len(verts)
     
-    #update_particles(part_data)
-    print(f"Enter\n")
+    print(f"Enter frame {frame}\n")
+    print(f"Vertex {j}: pos=({verts[j][0]},{verts[j][1]}, {verts[j][2]})\n") """
+    
+    
+    for i in range(verts.shape[0]): #Обмен координат Х и Z после ротации цилиндра
+        x = verts[i][2]
+        verts[i][2] = -verts[i][0]
+        #verts[i][1] = -verts[i][1]
+        verts[i][0] = x
+
+    
+
+    update_particles(part_data)
     calculate_density(verts, density)
-    print(f"Exit\n")
+    
+    """ print(f"Vertex {j}: pos=({verts[j][0]},{verts[j][1]}, {verts[j][2]})\n")
+    print(f"location= {verts[frame % len(verts)]} frame = {frame}\n")
+    if frame % 2 :
+        bpy.ops.mesh.primitive_cube_add(size = 0.5, location=verts[frame % len(verts)])
+    else:
+        bpy.ops.mesh.primitive_cylinder_add(location=verts[frame % len(verts)])
+    
+    print(f"Exit\n") """
     # Обновляем атрибут
     density_attr = cylinder_obj.data.attributes["density"]
     for i, val in enumerate(density):
@@ -248,18 +273,21 @@ def main():
     # Создаем объекты
     cylinder = create_hollow_cylinder(CYLINDER_RADIUS, CYLINDER_HEIGHT)
     bpy.ops.transform.rotate(value=math.pi/2.0, orient_axis='Y', orient_type='GLOBAL', orient_matrix=((1, 0, 0), (0, 1, 0), (0, 0, 1)), orient_matrix_type='GLOBAL', constraint_axis=(False, True, False), mirror=False, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=1, use_proportional_connected=False, use_proportional_projected=False, snap=False, snap_elements={'INCREMENT'}, use_snap_project=False, snap_target='CLOSEST', use_snap_self=True, use_snap_edit=True, use_snap_nonedit=True, use_snap_selectable=False)
+    
+    
+    
     mod = cylinder.modifiers.new(name="Subdivision", type='SUBSURF')
-    mod.levels = 1  # Количество уровней подразделения (в режиме просмотра)
+    mod.levels = 2  # Количество уровней подразделения (в режиме просмотра)
     mod.render_levels = 2  # Количество уровней при рендере
 
     # Применяем модификатор (если нужно сразу получить результат)
     bpy.ops.object.modifier_apply(modifier="Subdivision")
 
-    """ bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, -1.5), scale=(1, 5, 1.5))
+    bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, -2.55), scale=(1, 5, 1))
     cube = bpy.context.object
-    cube.modifiers.new(name="Collision", type='COLLISION') """
+    cube.modifiers.new(name="Collision", type='COLLISION')
 
-    bpy.ops.mesh.primitive_plane_add(size=CYLINDER_RADIUS*2, rotation=(math.pi/2.0, 0, math.pi/2.0), location=(-CYLINDER_HEIGHT/2 - 0.5, 0, 0))
+    bpy.ops.mesh.primitive_plane_add(size=CYLINDER_RADIUS, rotation=(math.pi/2.0, 0, math.pi/2.0), location=(-CYLINDER_HEIGHT/2 - 0.5, 0, 0))
     emitter = bpy.context.object
     emitter.name = "Particle_Emitter"
     
@@ -275,11 +303,10 @@ def main():
 
     bpy.ops.ptcache.bake_all(bake=True)
     #bpy.context.scene.frame_set(int(settings.frame_start))
-
     setup_density_visualization(cylinder)
    
     # Камера и свет
-    bpy.ops.object.camera_add(location=(-2.97332, -33.2669, 3.56712), rotation=(math.radians(82.8666), math.radians(-0.000004), math.radians(-3.26668)))
+    bpy.ops.object.camera_add(location=(-2.97332, -63.2669, 3.56712), rotation=(math.radians(82.8666), math.radians(-0.000004), math.radians(-3.26668))) #location=(-2.97332, -33.2669, 3.56712)
     bpy.context.scene.camera = bpy.context.object
     
     bpy.ops.object.light_add(type='SUN', location=(15, -15, 20))
@@ -294,7 +321,7 @@ def main():
             if area.type == 'VIEW_3D':
                 # Временное переключение контекста
                 with bpy.context.temp_override(window=window, area=area):
-                    bpy.context.space_data.shading.type = 'RENDERED'
+                    bpy.context.space_data.shading.type = 'RENDERED' #'WIREFRAME'
                 break
     print(f"Taichi version: {ti.__version__}")
 
